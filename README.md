@@ -1,10 +1,10 @@
-# Handle Proxy
+# Proxy Handle Hijack Demonstration
 
-Read arbitrary process memory without ever opening a handle to the target.
+Read arbitrary process memory from user-mode without ever opening a handle to the target.
 
 ## The problem
 
-Opening `PROCESS_VM_READ` to another process triggers `ObRegisterCallbacks` — registered by anti-cheats, EDRs, and the kernel itself. This is the primary detection surface for memory-reading tools.
+Opening `PROCESS_VM_READ` to another process triggers `ObRegisterCallbacks` — a kernel-level notification mechanism used by security software to monitor handle creation. This is the primary detection surface for cross-process memory access.
 
 ## The solution
 
@@ -51,7 +51,7 @@ At no point does anyone open a handle to the target. The proxy process already h
 
 **No handle to target is ever opened.** Not by your process. Not during the hijack. The proxy process already held handle `0x1234` to the target before you touched it — from normal operation (compatibility shims, crash reporters, debug tooling).
 
-**The syscall happens in the proxy's context.** `NtReadVirtualMemory` called from PID 42 looks like PID 42 reading memory. An EDR sees a legitimate process performing normal memory access.
+**The syscall happens in the proxy's context.** `NtReadVirtualMemory` called from PID 42 looks like PID 42 reading memory. From the kernel's perspective, a legitimate process is performing normal memory access on a handle it already owns.
 
 **Direct syscalls bypass user-mode hooks.** The shellcode executes `syscall` directly, never touching `ntdll.dll`. If `NtReadVirtualMemory` is hooked by a security product, the hook is irrelevant.
 
@@ -121,3 +121,4 @@ Visual Studio 2022 + Windows SDK.
 ## Disclaimer
 
 Demonstration of Windows handle architecture and process management. Handle enumeration, duplication, and remote thread creation are standard documented Windows APIs. The techniques described follow the documented Windows security model for process and handle access rights.
+
