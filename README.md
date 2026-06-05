@@ -10,12 +10,37 @@ Opening `PROCESS_VM_READ` to another process triggers `ObRegisterCallbacks` — 
 
 Don't open a handle. Use one that already exists.
 
-1. **Enumerate all system handles** via `NtQuerySystemInformation(SystemHandleInformation)` — returns every open handle, its owner PID, and its access mask
-2. **Find a process that already holds `PROCESS_VM_READ` to the target** — scan the handle table for an entry where `Object → target_pid` and `GrantedAccess & PROCESS_VM_READ`
-3. **Verify by duplicating the handle** into your own process for a microsecond — just long enough to call `GetProcessId()` and confirm it points to the target — then close it immediately
-4. **Store only the raw handle value** — a `USHORT` like `0x1234`. Not a `HANDLE` object. Just the index into the proxy process's handle table
-5. **Hijack the proxy process** — open it with `VM_OPERATION | VM_READ | VM_WRITE | CREATE_THREAD`, stomp shellcode into a module's `.text` slack, allocate shared memory, create a remote thread
-6. **The shellcode runs inside the proxy process** — where `0x1234` is a real handle. It calls `syscall(NtReadVirtualMemory, 0x1234, ...)` using the handle the proxy process already owned
+1. **Enumerate all system handles** via `NtQuerySystemInformation(SystemHandleInformation)`
+2. **Find a process that already holds `PROCESS_VM_READ` to the target**
+3. **Verify by duplicating the handle**
+4. **Store only the raw handle value**
+5. **Hijack the proxy process by stomping shellcode into module's `.text` slack**
+6. **The shellcode runs inside the proxy process**
+
+```mermaid
+graph TB
+    subgraph OurProcess["Our Process"]
+        MAIN["proxy.cpp<br/>──────────<br/>1. NtQuerySystemInformation(16)<br/>   → enumerate all system handles<br/>2. find process holding<br/>   PROCESS_VM_READ to target<br/>3. duplicate handle → verify PID<br/>   → close (microseconds)<br/>4. store raw handle value (USHORT)<br/>5. open process → VM_OP | VM_RW<br/>   | CREATE_THREAD<br/>6. stomp shellcode into<br/>   .text slack space<br/>7. allocate ProxyData struct<br/>8. NtCreateThreadEx → shellcode"]
+        PD["ProxyData<br/>──────────<br/>syscall_num (XOR'd)<br/>xor_key<br/>handle_value (USHORT)<br/>signal · status<br/>target_addr · size<br/>buffer[4096]"]
+    end
+    subgraph ProxyProc["Proxy Process (e.g. streaming, anti-lag)"]
+        SC["shellcode loop<br/>──────────<br/>wait signal=1<br/>decrypt syscall_num<br/>syscall(NtReadVirtualMemory,<br/>  handle_value, target_addr)<br/>write buffer · signal=0"]
+        HANDLE["handle table<br/>──────────<br/>0x1234 → target<br/>(PROCESS_VM_READ)"]
+    end
+    subgraph Target["Target Process"]
+        TGT["target memory<br/>──────────<br/>never sees a handle<br/>opened against it"]
+    end
+    MAIN -->|"enumerate handles"| HANDLE
+    MAIN -->|"write target_addr + signal=1"| PD
+    PD -->|"shared memory IPC"| SC
+    SC -->|"syscall(0x1234, addr, buf)"| HANDLE
+    HANDLE -->|"read memory"| TGT
+    style MAIN fill:#c94,stroke:#333,stroke-width:2px,color:#000
+    style PD fill:#c94,stroke:#333,color:#000
+    style SC fill:#a59,stroke:#333,stroke-width:2px,color:#000
+    style HANDLE fill:#a59,stroke:#333,color:#000
+    style TGT fill:#c44,stroke:#333,stroke-width:2px,color:#000
+```
 
 At no point does anyone open a handle to the target. The proxy process already had the handle. The duplicated handle in step 3 exists for microseconds and is only used for verification. What gets stored and used is a bare `USHORT` — meaningless outside the proxy process's handle table.
 
